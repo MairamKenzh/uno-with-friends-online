@@ -117,7 +117,12 @@ input.code{font-family:var(--f-num);letter-spacing:.25em;text-transform:uppercas
 button.card{cursor:pointer}
 .hand .card.ok{transform:translateY(-8px);box-shadow:0 0 0 3px var(--yel),0 12px 20px -6px rgba(0,0,0,.6)}
 .hand .card.ok:hover{transform:translateY(-14px)}
-.hand.myturn .card:not(.ok){filter:saturate(.45) brightness(.7)}
+.hand .card.sel{transform:translateY(-20px);box-shadow:0 0 0 4px var(--fg),0 0 0 7px var(--yel),0 14px 22px -6px rgba(0,0,0,.6)}
+.hand.myturn .card.sel{filter:none}
+.card .ord{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:var(--fg);color:var(--bg);font:800 12px/20px var(--f-ui);text-align:center;text-shadow:none}
+.btn.pulse{animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{50%{transform:scale(1.08);box-shadow:0 0 0 6px rgba(229,70,59,.35)}}
+.hand.myturn .card:not(.ok):not(.sel){filter:saturate(.45) brightness(.7)}
 .hand.busy{opacity:.6;pointer-events:none}
 .card.shake{animation:shake .32s}
 @keyframes shake{25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}

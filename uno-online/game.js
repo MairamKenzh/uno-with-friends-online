@@ -39,6 +39,10 @@ function canPlay(card, top, col) {
   return card[0] === col || card[1] === top[1];
 }
 
+function valName(v) {
+  return { S: "«Пропуск»", R: "«Разворот»", D: "«+2»" }[v] || "«" + v + "»";
+}
+
 function cardName(c) {
   if (c === "wW") return "«Заказ цвета»";
   if (c === "wF") return "«+4»";
@@ -207,33 +211,39 @@ class Game {
 
     switch (a.t) {
       case "play": {
+        // a.list = [{i, c}, ...] — одна или несколько одинаковых карт за ход
         if (i !== this.tu) return false;
-        const h = P.hand, k = a.i | 0, c = h[k];
-        if (c !== a.c || !canPlay(c, top, this.col)) return false;
-        if (this.drew && k !== h.length - 1) return false; // после взятия можно сыграть только взятую
-        if (c[0] === "w" && !COLORS.includes(a.col)) return false;
+        const h = P.hand;
+        const list = Array.isArray(a.list) ? a.list : [{ i: a.i, c: a.c }];
+        if (!list.length || list.length > h.length) return false;
+        const ks = list.map(x => (x ? x.i | 0 : -1));
+        if (new Set(ks).size !== ks.length) return false;
+        const cards = ks.map(k => h[k]);
+        if (list.some((x, n) => !cards[n] || cards[n] !== x.c)) return false;
+        const first = cards[0], last = cards[cards.length - 1], m = cards.length;
+        if (!canPlay(first, top, this.col)) return false;                      // первая должна подходить к сбросу
+        if (this.drew && (m > 1 || ks[0] !== h.length - 1)) return false;      // после взятия — только взятая карта
+        if (m > 1 && (first[0] === "w" || cards.some(c => c[1] !== first[1]))) return false; // остальные — того же значения
+        if (last[0] === "w" && !COLORS.includes(a.col)) return false;
         this.uv = null;
-        h.splice(k, 1);
-        this.disc.push(c);
-        this.col = c[0] === "w" ? a.col : c[0];
-        this.addLog(P.nm + ": " + cardName(c) + (c[0] === "w" ? " → " + CNAME2[a.col] : ""));
+        [...ks].sort((x, y) => y - x).forEach(k => h.splice(k, 1));
+        cards.forEach(c => this.disc.push(c));
+        this.col = last[0] === "w" ? a.col : last[0];
+        this.addLog(P.nm + ": " + (m > 1 ? m + " карты " + valName(first[1]) : cardName(last)) + (last[0] === "w" ? " → " + CNAME2[a.col] : ""));
         if (h.length === 0) {
-          this.win = P.id; P.w++; this.ph = "end"; P.uno = false;
+          this.win = P.id; P.w++; this.ph = "end";
           this.addLog(P.nm + " выигрывает партию!");
           return true;
         }
-        if (h.length === 1 && !P.uno) this.uv = P.id;
-        if (h.length === 1 && P.uno) this.addLog(P.nm + ": «Уно!»");
-        P.uno = false;
-        const n = this.pl.length, v = c[1];
+        if (h.length === 1) this.uv = P.id; // осталась одна карта — надо успеть нажать «Уно!»
+        const n = this.pl.length, v = last[1];
         let step = 1;
-        if (v === "R") { this.dir *= -1; if (n === 2) step = 2; }
-        if (v === "S") step = 2;
+        if (v === "R") { if (m % 2 === 1) this.dir *= -1; if (n === 2) step = 2; }
+        if (v === "S") step = 1 + m;
         if (v === "D" || v === "F") {
-          const t = this.nextIdx(1), m = v === "D" ? 2 : 4;
-          this.drawTo(t, m);
-          this.pl[t].uno = false;
-          this.addLog(this.pl[t].nm + " берёт " + m + " и пропускает ход");
+          const t = this.nextIdx(1), cnt = (v === "D" ? 2 : 4) * m;
+          this.drawTo(t, cnt);
+          this.addLog(this.pl[t].nm + " берёт " + cnt + " и пропускает ход");
           step = 2;
         }
         this.advance(step);
@@ -241,7 +251,7 @@ class Game {
       }
       case "draw": {
         if (i !== this.tu || this.drew) return false;
-        this.uv = null; P.uno = false;
+        this.uv = null;
         this.drawTo(i, 1);
         const c = P.hand[P.hand.length - 1];
         if (canPlay(c, top, this.col)) { this.drew = true; this.addLog(P.nm + " берёт карту"); }
@@ -254,9 +264,9 @@ class Game {
         this.advance(1);
         return true;
       case "uno":
-        if (P.hand.length > 2 || (P.uno && this.uv !== pid)) return false;
-        if (this.uv === pid) { this.uv = null; this.addLog(P.nm + ": «Уно!»"); }
-        else P.uno = true;
+        if (this.uv !== pid) return false; // кнопка работает только когда осталась одна карта
+        this.uv = null;
+        this.addLog(P.nm + ": «Уно!»");
         return true;
       case "catch": {
         if (!this.uv || this.uv === pid) return false;
@@ -302,8 +312,13 @@ class Game {
       if (s > bs) { bs = s; best = k; }
     });
     if (best < 0) return this.apply(P.id, { t: "draw" });
-    if (h.length === 2 && (P.bot ? Math.random() < 0.85 : true)) P.uno = true;
-    return this.apply(P.id, { t: "play", i: best, c: h[best], col: this.pickCol(h.filter((_, k) => k !== best)) });
+    // бот тоже кладёт все одинаковые карты разом
+    const list = [best];
+    if (h[best][0] !== "w") h.forEach((c, k) => { if (k !== best && c[0] !== "w" && c[1] === h[best][1]) list.push(k); });
+    const rest = h.filter((_, k) => !list.includes(k));
+    const ok = this.apply(P.id, { t: "play", list: list.map(k => ({ i: k, c: h[k] })), col: this.pickCol(rest) });
+    if (ok && this.uv === P.id && (P.bot ? Math.random() < 0.8 : true)) this.apply(P.id, { t: "uno" });
+    return ok;
   }
 
   /** Состояние для конкретного игрока: чужие руки скрыты. */

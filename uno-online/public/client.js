@@ -45,9 +45,24 @@ let myPid = LS.get("lk.pid");
 if (!myPid || !/^[a-z0-9]{6,40}$/i.test(myPid)) { myPid = "p" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); LS.set("lk.pid", myPid); }
 let myName = clean(LS.get("lk.name")) || "Игрок " + (10 + Math.floor(Math.random() * 89));
 
+/* ---------- страница открыта без сервера ---------- */
+if (typeof io !== "function") {
+  $("screen").innerHTML = `<section class="box" style="max-width:640px">
+    <h2>Сервер не запущен</h2>
+    <p class="note">Эту страницу нельзя открыть двойным щелчком по файлу: игре нужен сервер, который раздаёт карты и связывает игроков.</p>
+    <ol class="note" style="padding-left:20px;display:flex;flex-direction:column;gap:6px;margin:0">
+      <li>Установите Node.js (версия LTS) с сайта nodejs.org.</li>
+      <li>Откройте папку <b>uno-online</b>, где лежит файл <b>package.json</b>, щёлкните по адресной строке проводника, введите <b>cmd</b> и нажмите Enter.</li>
+      <li>В чёрном окне введите <b>npm install</b>, затем <b>npm start</b>. Окно не закрывайте.</li>
+      <li>Откройте в браузере <b>http://localhost:3000</b>.</li>
+    </ol></section>`;
+  return;
+}
+
 /* ---------- состояние ---------- */
 const socket = io();
 let connected = false, screen = "home", view = null, code = null, pending = false, pick = null, rooms = [], lastTop = "";
+let sel = []; // выбранные карты (номера в руке) для хода несколькими одинаковыми
 const urlRoom = (new URLSearchParams(location.search).get("room") || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
 
 socket.on("connect", () => {
@@ -59,7 +74,11 @@ socket.on("connect", () => {
 });
 socket.on("disconnect", () => { connected = false; render(); });
 socket.on("rooms", l => { rooms = Array.isArray(l) ? l : []; if (screen === "home") { const r = $("rooms"); if (r) r.innerHTML = roomsHTML(); } });
-socket.on("state", v => { if (!code || !v || v.code !== code) return; view = v; pending = false; render(); });
+socket.on("state", v => {
+  if (!code || !v || v.code !== code) return;
+  if (!view || v.seq !== view.seq) sel = [];
+  view = v; pending = false; render();
+});
 socket.on("kicked", () => { goHome(); toast("Вас убрали из комнаты"); });
 
 function setUrl(c) {
@@ -130,7 +149,8 @@ function renderHome() {
         <li>${cardHTML("gD", { cls: "mini" })}<span><b>+2 и +4.</b> Следующий берёт карты и пропускает ход. Стопки не складываются.</span></li>
         <li>${cardHTML("wW", { cls: "mini" })}<span><b>Заказ цвета.</b> Кладётся на что угодно, вы выбираете цвет.</span></li>
         <li>${cardHTML("back", { cls: "mini" })}<span><b>Нечем ходить?</b> Возьмите карту из колоды. Если подходит — можно сразу сыграть её.</span></li>
-        <li>${cardHTML("yR", { cls: "mini" })}<span><b>«Уно!»</b> Остаётся одна карта — жмите кнопку. Не успели — соперник поймает, и вы возьмёте 2.</span></li>
+        <li>${cardHTML("g5", { cls: "mini" })}<span><b>Одинаковые разом.</b> Есть несколько карт с тем же числом или знаком — выберите их и положите за один ход.</span></li>
+        <li>${cardHTML("yR", { cls: "mini" })}<span><b>«Уно!»</b> Осталась одна карта — появится кнопка «Уно!», жмите её. Не успели — соперник поймает, и вы возьмёте 2.</span></li>
       </ul>
     </section>
   </div>`;
@@ -190,10 +210,13 @@ function renderGame() {
   const popTop = top !== lastTop; lastTop = top;
   const uvP = v.uv && v.pl.find(p => p.id === v.uv);
   const canCatch = v.ph === "play" && uvP && v.uv !== myPid && me;
-  const unoOn = me && me.u;
-  const canUno = v.ph === "play" && me && hand.length <= 2 && (!unoOn || v.uv === myPid);
+  const showUno = v.ph === "play" && me && v.uv === myPid; // «Уно!» — только когда осталась одна карта
+  if (!myTurn) sel = [];
+  const selVal = sel.length ? hand[sel[0]][1] : null;
   let status, hint = "";
   if (v.ph === "end") { const w = v.pl.find(p => p.id === v.win); status = w ? (w.id === myPid ? "Вы победили!" : w.nm + " побеждает") : "Партия окончена"; }
+  else if (showUno) { status = "Жмите «Уно!»"; hint = "У вас осталась одна карта — успейте, пока вас не поймали"; }
+  else if (myTurn && sel.length) { status = "Выбрано карт: " + sel.length; hint = "Добавьте ещё одинаковые карты или нажмите «Положить»"; }
   else if (myTurn) { status = "Ваш ход"; hint = v.drew ? "Взятая карта подходит — сыграйте её или пасуйте" : "Сыграйте подсвеченную карту или возьмите из колоды"; }
   else { status = "Ходит " + (turnP ? turnP.nm : "…"); if (turnP && !turnP.on) hint = "Игрок не в сети — через несколько секунд за него сходит бот"; }
   if (!me) hint = "Вы смотрите игру и сядете за стол в следующей партии.";
@@ -215,13 +238,19 @@ function renderGame() {
     <div class="hint">${esc(hint)}</div>
     <div class="acts">
       ${myTurn && v.drew ? `<button class="btn" data-act="pass" ${pending ? "disabled" : ""}>Пас</button>` : ""}
-      ${me && v.ph === "play" ? `<button class="btn uno ${unoOn && v.uv !== myPid ? "on" : ""}" data-act="uno" ${canUno && !pending ? "" : "disabled"}>${unoOn && v.uv !== myPid ? "Уно ✓" : "Уно!"}</button>` : ""}
+      ${myTurn && sel.length ? `<button class="btn y" data-act="playsel" ${pending ? "disabled" : ""}>Положить ${sel.length > 1 ? sel.length + " карты" : "карту"}</button><button class="btn ghost" data-act="clearsel">Отмена</button>` : ""}
+      ${showUno ? `<button class="btn uno pulse" data-act="uno" ${pending ? "disabled" : ""}>Уно!</button>` : ""}
       ${canCatch ? `<button class="btn y" data-act="catch">Поймать ${esc(uvP.nm)}!</button>` : ""}
     </div>
     ${me ? `<div class="handwrap"><div class="handhead"><span>Ваши карты</span><span>${hand.length}</span></div>
       <div class="hand ${myTurn ? "myturn" : ""} ${pending ? "busy" : ""}">${hand.map((c, k) => {
-        const ok = myTurn && canPlay(c, top, v.col) && (!v.drew || k === hand.length - 1);
-        return cardHTML(c, { btn: true, cls: ok ? "ok" : "", attrs: ` data-act="card" data-i="${k}"` });
+        const n = sel.indexOf(k);
+        let cls = "";
+        if (n >= 0) cls = "sel";
+        else if (sel.length) cls = c[0] !== "w" && c[1] === selVal ? "ok" : "";
+        else if (myTurn && canPlay(c, top, v.col) && (!v.drew || k === hand.length - 1)) cls = "ok";
+        const badge = n >= 0 && sel.length > 1 ? `<span class="ord">${n + 1}</span>` : "";
+        return cardHTML(c, { btn: true, cls, attrs: ` data-act="card" data-i="${k}"` }).replace(/<\/button>$/, badge + "</button>");
       }).join("")}</div></div>` : ""}
     <ul class="log">${v.log.map(l => `<li>${esc(l)}</li>`).join("")}</ul>`;
 }
@@ -296,20 +325,43 @@ document.addEventListener("click", e => {
     case "kick": send("kick", { id: b.dataset.id }); break;
     case "card": {
       const v = view; if (!v || !v.hand) return;
-      const k = +b.dataset.i, c = v.hand[k];
+      const h = v.hand, k = +b.dataset.i, c = h[k];
       const myTurn = v.ph === "play" && v.pl[v.tu] && v.pl[v.tu].id === myPid;
-      if (!myTurn || !canPlay(c, v.top, v.col) || (v.drew && k !== v.hand.length - 1)) {
-        b.classList.remove("shake"); void b.offsetWidth; b.classList.add("shake");
-        if (!myTurn) toast("Сейчас не ваш ход");
-        return;
+      const shake = () => { b.classList.remove("shake"); void b.offsetWidth; b.classList.add("shake"); };
+      if (!myTurn) { shake(); toast("Сейчас не ваш ход"); return; }
+      // уже выбраны карты: добавляем/убираем одинаковые
+      if (sel.length) {
+        const n = sel.indexOf(k);
+        if (n === 0) { sel = []; render(); return; }               // сняли первую — выбор сбрасывается
+        if (n > 0) { sel.splice(n, 1); render(); return; }
+        if (c[0] !== "w" && c[1] === h[sel[0]][1]) { sel.push(k); render(); return; }
+        if (!canPlay(c, v.top, v.col)) { shake(); return; }
+        sel = [];                                                    // другая подходящая карта — начинаем заново
       }
-      if (c[0] === "w") { pick = { i: k, c }; renderOverlay(); const f = document.querySelector(".sw"); if (f) f.focus(); return; }
-      send("play", { i: k, c }); break;
+      if (!canPlay(c, v.top, v.col) || (v.drew && k !== h.length - 1)) { shake(); return; }
+      const twins = c[0] !== "w" && !v.drew && h.some((x, j) => j !== k && x[0] !== "w" && x[1] === c[1]);
+      if (twins) { sel = [k]; render(); return; }                    // есть такие же — даём выбрать ещё
+      playCards([k]); break;
     }
-    case "pickcol": { if (!pick) return; const p = pick; pick = null; send("play", { i: p.i, c: p.c, col: b.dataset.c }); break; }
+    case "playsel": playCards(sel.slice()); break;
+    case "clearsel": sel = []; render(); break;
+    case "pickcol": { if (!pick) return; const p = pick; pick = null; sel = []; send("play", { list: p.list, col: b.dataset.c }); break; }
     case "cancelpick": pick = null; renderOverlay(); break;
   }
 });
+
+/** Положить карты по номерам в руке; для чёрной карты сначала спрашиваем цвет */
+function playCards(ks) {
+  const h = view && view.hand; if (!h || !ks.length) return;
+  const list = ks.map(k => ({ i: k, c: h[k] }));
+  if (list[list.length - 1].c[0] === "w") {
+    pick = { list }; renderOverlay();
+    const f = document.querySelector(".sw"); if (f) f.focus();
+    return;
+  }
+  sel = [];
+  send("play", { list });
+}
 
 render();
 })();
