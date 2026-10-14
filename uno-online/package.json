@@ -1,0 +1,17 @@
+{
+  "name": "poslednyaya-karta",
+  "version": "1.0.0",
+  "description": "Онлайн карточная игра по правилам Уно для нескольких игроков (Node.js + Socket.IO)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  }
+}
